@@ -157,18 +157,13 @@ func (hc *HTTPConnector) Upload(payload *Payload) (err error) {
 		GetFileContent: func() (io.ReadCloser, error) {
 			pr, pw := io.Pipe()
 			go func() {
-				defer pw.Close()
-				content, err := payload.GetContent(NoFix)
-				if !NoFix {
-					log.SetOutput(os.Stderr)
-					if err != nil {
-						log.Printf("G-Code fix error(ignored): %s", err)
-					} else if payload.ShouldBeFix() {
-						log.Printf("G-Code fixed")
-					}
-					log.SetOutput(w)
+				content, err := payload.GetContent()
+				if err != nil {
+					pw.CloseWithError(err)
+					return
 				}
 				pw.Write(content)
+				pw.Close()
 			}()
 			return pr, nil
 		},

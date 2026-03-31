@@ -7,20 +7,11 @@ import (
 	"net"
 	"net/http"
 	"runtime"
-	"strings"
 	"time"
 )
 
 const (
 	maxMemory = 64 << 20 // 64MB
-)
-
-var (
-	noTrim    = false
-	noShutoff = false
-	// noPreheat        = false
-	// noReinforceTower = false
-	noReplaceTool = false
 )
 
 type stats struct {
@@ -126,12 +117,6 @@ func startOctoPrintServer(listenAddr string, printer *Printer) error {
 		}
 		defer file.Close()
 
-		// read X-Api-Key header
-		apiKey := r.Header.Get("X-Api-Key")
-		if len(apiKey) > 5 {
-			argumentsFromApi(apiKey)
-		}
-
 		// Send the stream to the printer
 		payload := NewPayload(file, fd.Filename, fd.Size)
 		if err := Connector.Upload(printer, payload); err != nil {
@@ -199,31 +184,4 @@ func internalServerErrorResponse(w http.ResponseWriter, err string) {
 func bedRequestResponse(w http.ResponseWriter, err string) {
 	log.Print("Bad request: ", err)
 	http.Error(w, err, http.StatusBadRequest)
-}
-
-func argumentsFromApi(str string) {
-	noTrim = strings.Contains(str, "notrim")
-	// noPreheat = strings.Contains(str, "nopreheat")
-	noShutoff = strings.Contains(str, "noshutoff")
-	// noReinforceTower = strings.Contains(str, "noreinforcetower")
-	noReplaceTool = strings.Contains(str, "noreplacetool")
-	msg := []string{}
-	if noTrim {
-		msg = append(msg, "-notrim")
-	}
-	// if noPreheat {
-	// 	msg = append(msg, "-nopreheat")
-	// }
-	if noShutoff {
-		msg = append(msg, "-noshutoff")
-	}
-	// if noReinforceTower {
-	// 	msg = append(msg, "-noreinforcetower")
-	// }
-	if noReplaceTool {
-		msg = append(msg, "-noreplacetool")
-	}
-	if len(msg) > 0 {
-		log.Printf("SMFix with args: %s", strings.Join(msg, " "))
-	}
 }

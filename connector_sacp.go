@@ -48,13 +48,9 @@ func (sc *SACPConnector) Disconnect() error {
 }
 
 func (sc *SACPConnector) Upload(payload *Payload) (err error) {
-	content, err := payload.GetContent(NoFix)
-	if !NoFix {
-		if err != nil {
-			log.Printf("G-Code fix error(ignored): %s", err)
-		} else if payload.ShouldBeFix() {
-			log.Printf("G-Code fixed")
-		}
+	content, err := payload.GetContent()
+	if err != nil {
+		return
 	}
 
 	w := uilive.New()
