@@ -21,16 +21,9 @@ var (
 	Tool2Temperature    int
 	BedTemperature      int
 	Home                bool
-	NoFix               bool
 	Debug               bool
 
-	_Payloads       []*Payload
-	SmFixExtensions = map[string]bool{
-		".gcode": true,
-		".nc":    false,
-		".cnc":   false,
-		".bin":   false,
-	}
+	_Payloads []*Payload
 )
 
 func main() {
@@ -59,7 +52,6 @@ func main() {
 	flag.IntVar(&BedTemperature, "bed", parseIntEnv("BED", 0), "set the temperature (preheat) of bed")
 	flag.BoolVar(&Home, "home", parseBoolEnv("HOME", false), "home the printer")
 	flag.DurationVar(&DiscoverTimeout, "timeout", parseDurationEnv("TIMEOUT", 4*time.Second), "printer discovery timeout")
-	flag.BoolVar(&NoFix, "nofix", parseBoolEnv("NOFIX", false), "disable SMFix(built-in)")
 	flag.BoolVar(&Debug, "debug", parseBoolEnv("DEBUG", false), "debug mode")
 
 	flag.Usage = flag_usage
@@ -67,10 +59,6 @@ func main() {
 
 	if Debug {
 		log.Printf("-- Debug mode: %s", Version)
-	}
-
-	if NoFix {
-		log.Println("smfix disabled")
 	}
 
 	var printer *Printer

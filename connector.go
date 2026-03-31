@@ -31,18 +31,9 @@ func (p *Payload) ReadableSize() string {
 	return humanReadableSize(p.Size)
 }
 
-func (p *Payload) GetContent(nofix bool) (cont []byte, err error) {
-	if nofix || !p.ShouldBeFix() {
-		cont, err = io.ReadAll(p.File)
-	} else {
-		cont, err = postProcess(p.File)
-		p.Size = int64(len(cont))
-	}
+func (p *Payload) GetContent() (cont []byte, err error) {
+	cont, err = io.ReadAll(p.File)
 	return cont, err
-}
-
-func (p *Payload) ShouldBeFix() bool {
-	return shouldBeFix(p.Name)
 }
 
 func NewPayload(file io.Reader, name string, size int64) *Payload {
