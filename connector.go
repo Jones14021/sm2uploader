@@ -7,16 +7,6 @@ import (
 	"time"
 )
 
-const (
-	FILE_SIZE_MIN = 1
-	FILE_SIZE_MAX = 2 << 30 // 2GB
-)
-
-var (
-	errFileEmpty    = errors.New("File is empty.")
-	errFileTooLarge = errors.New("File is too large.")
-)
-
 type Payload struct {
 	File io.Reader
 	Name string
@@ -74,12 +64,6 @@ func (c *connector) Upload(printer *Printer, payload *Payload) error {
 			}
 			defer h.Disconnect()
 
-			if payload.Size > FILE_SIZE_MAX {
-				return errFileTooLarge
-			}
-			if payload.Size < FILE_SIZE_MIN {
-				return errFileEmpty
-			}
 			// Upload the file to the printer
 			if err := h.Upload(payload); err != nil {
 				return err

@@ -7,8 +7,6 @@ Luban 和 Cura with SnapmakerPlugin 对于新手很友好，但是我的大部�
 ## 功能
 - 自动发现局域网内所有的 Snapmaker 打印机（和 Luban 相同的协议，使用 UDP 广播）
 - 模拟 OctoPrint Server，这样就可以在各种切片软件，比如 Cura/PrusaSlicer/SuperSlicer/OrcaSlicer 中向 Snapmaker 打印机发送文件
-- 为多挤出机提供智能预热、关闭不再使用的喷头等优化功能
-- 强化擦料塔，避免多材料打印时因不粘合而倒塌，例如在 PETG+PLA 混合打印时
 - Snapmaker 2 A-Series 第一次连接时需要授权，之后可以直接一步上传
 - 支持 Snapmaker 2 A/J1/Artisan 全系列打印机
 - 支持 macOS/Windows/Linux/RaspberryPi 多个平台
