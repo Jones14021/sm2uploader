@@ -5,12 +5,15 @@ import (
 	"crypto/md5"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -100,6 +103,9 @@ func TestSACPReadFragmented(t *testing.T) {
 }
 
 func TestSACPParseHardware(t *testing.T) {
+	if got := moduleName(18); got != "Dual extrusion head" {
+		t.Fatalf("module 18 name = %q", got)
+	}
 	modules, err := parseSACPModules([]byte{1, 3, 13, 0, 0, 0, 1, 0, 0, 0, 1, 3, 0, '1', '.', '0'})
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +126,7 @@ func TestSACPParseHardware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(nozzles) != 2 || nozzles[0].Diameter != 0.4 || nozzles[1].Diameter != 0.6 || nozzles[1].Temperature != 202.5 || nozzles[1].Target != 210 {
+	if len(nozzles) != 2 || *nozzles[0].Diameter != 0.4 || *nozzles[1].Diameter != 0.6 || *nozzles[1].Temperature != 202.5 || *nozzles[1].Target != 210 {
 		t.Fatalf("unexpected nozzles: %+v", nozzles)
 	}
 	if _, err := parseSACPModules([]byte{1, 1}); err == nil {
@@ -132,6 +138,62 @@ func TestSACPParseHardware(t *testing.T) {
 	beds, err := parseSACPBeds([]byte{9, 1, 0, 0x54, 0xf2, 0, 0, 60, 0})
 	if err != nil || len(beds) != 1 || beds[0].Temperature != 62.036 || beds[0].Target != 60 {
 		t.Fatalf("unexpected bed: %+v, %v", beds, err)
+	}
+}
+
+func TestHTTPDualExtrusionStatus(t *testing.T) {
+	modules := []printerModule{{Key: 1, ID: 18}, {Key: 2, ID: 512}}
+	data := []byte(`{"moduleInfo":[{"key":1,"nozzleTemperature1":20,"nozzleTargetTemperature1":0,"nozzleTemperature2":22.5,"nozzleTargetTemperature2":215},{"key":2,"heatedBedTemperature":21,"heatedBedTargetTemperature":60}]}`)
+	nozzles, beds, err := parseHTTPModuleInfo(data, modules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nozzles) != 2 || *nozzles[0].Temperature != 20 || *nozzles[0].Target != 0 || *nozzles[1].Temperature != 22.5 || *nozzles[1].Target != 215 {
+		t.Fatalf("unexpected nozzle readings: %+v", nozzles)
+	}
+	if nozzles[0].Diameter != nil || nozzles[0].Type != nil {
+		t.Fatalf("unreported nozzle details must remain unknown: %+v", nozzles[0])
+	}
+	if len(beds) != 1 || beds[0].Temperature != 21 || beds[0].Target != 60 {
+		t.Fatalf("unexpected bed readings: %+v", beds)
+	}
+	if err := setHTTPActiveNozzle([]byte(`{"active":0}`), nozzles); err != nil || nozzles[0].Active == nil || !*nozzles[0].Active || *nozzles[1].Active {
+		t.Fatalf("unexpected active nozzle: %+v, %v", nozzles, err)
+	}
+	if err := setHTTPActiveNozzle([]byte(`{"active":1}`), nozzles); err != nil || *nozzles[0].Active || !*nozzles[1].Active {
+		t.Fatalf("unexpected active nozzle after switch: %+v, %v", nozzles, err)
+	}
+	encoded, err := json.Marshal(nozzles[0])
+	if err != nil || bytes.Contains(encoded, []byte(`"diameter"`)) || bytes.Contains(encoded, []byte(`"type"`)) {
+		t.Fatalf("unknown nozzle details encoded: %s, %v", encoded, err)
+	}
+	if err := setHTTPActiveNozzle([]byte(`{}`), nozzles); err == nil {
+		t.Fatal("accepted missing active extruder")
+	}
+}
+
+func TestLubanNozzleProfiles(t *testing.T) {
+	configDir := t.TempDir()
+	profileDir := filepath.Join(configDir, "snapmaker-luban", "Config", "printing", "a350_dual")
+	if err := os.MkdirAll(profileDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for index, diameter := range []string{"0.6", "0.4"} {
+		path := filepath.Join(profileDir, fmt.Sprintf("extruder_%d.def.json", index))
+		if err := os.WriteFile(path, []byte(`{"overrides":{"machine_nozzle_size":{"default_value":`+diameter+`}}}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	modules := []printerModule{{Key: 1, ID: 18}}
+	nozzles := []printerNozzle{{Module: 1, Index: 0}, {Module: 1, Index: 1}}
+	applyLubanNozzleProfiles(configDir, "Snapmaker 2.0 A350", modules, nozzles)
+	if nozzles[0].Diameter == nil || nozzles[1].Diameter == nil || *nozzles[0].Diameter != 0.6 || *nozzles[1].Diameter != 0.4 || nozzles[0].DiameterSource != "Luban profile" {
+		t.Fatalf("unexpected Luban profile sizes: %+v", nozzles)
+	}
+	nozzles = []printerNozzle{{Module: 1, Index: 0}}
+	applyLubanNozzleProfiles(configDir, "Unknown printer", modules, nozzles)
+	if nozzles[0].Diameter != nil {
+		t.Fatal("applied A350 profile to an unknown printer")
 	}
 }
 

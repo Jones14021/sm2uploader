@@ -33,6 +33,19 @@ function moduleDetails(info){
   if(typeof info.quickSwapType==='number')details.push('Swap type: '+info.quickSwapType);
   return details.map(escapeText).join(' &middot; ');
 }
+function renderNozzle(nozzle, dual){
+  const label=dual?(nozzle.index===0?'Left nozzle':'Right nozzle'):'Nozzle '+(nozzle.index+1);
+  const active=nozzle.active===true?'Active':nozzle.active===false?'Standby':'Status unavailable';
+  const temperature=nozzle.temperature==null?null:escapeText(Number(nozzle.temperature).toFixed(1))+' &deg;C';
+  const diameter=nozzle.diameter==null?null:escapeText(Number(nozzle.diameter).toFixed(2))+' mm';
+  const readings=[];
+  if(nozzle.diameterSource)readings.push(escapeText(nozzle.diameterSource));
+  if(diameter && temperature)readings.push(temperature);
+  if(nozzle.target!=null)readings.push(escapeText(nozzle.target)+' &deg;C target');
+  if(!diameter)readings.push('Diameter unavailable');
+  if(nozzle.type!=null)readings.push('Type '+escapeText(nozzle.type));
+  return `<div class="nozzle"><div class="nozzle-head"><span>${escapeText(label)}</span><span>${active}</span></div><strong>${diameter || temperature || '--'}</strong><small>${readings.join(' &middot; ')}</small></div>`;
+}
 let busy = false;
 async function refresh(){
   if(busy)return;
@@ -46,7 +59,7 @@ async function refresh(){
     $('module-count').textContent=data.modules.length+' detected';
     $('modules').className=''; $('modules').innerHTML=data.modules.length ? data.modules.map(module=>{const info=data.details?.moduleInfo?.find(item=>item.key===module.key);const details=moduleDetails(info);return `<div class="row"><div><div class="row-title">${escapeText(module.name)}</div><div class="row-meta">Module ${escapeText(module.id)} &middot; Key ${escapeText(module.key)}${module.firmware?' &middot; Firmware '+escapeText(module.firmware):''}</div>${details?'<div class="row-meta">'+details+'</div>':''}</div><span class="state ${module.state==='Ready'?'':'warning'}">${escapeText(module.state)}</span></div>`;}).join(''):'<div class="empty">No modules reported</div>';
     $('nozzles').className=data.nozzles.length?'nozzle-grid':'empty';
-    $('nozzles').innerHTML=data.nozzles.length?data.nozzles.map(nozzle=>`<div class="nozzle"><div class="nozzle-head"><span>Module ${escapeText(nozzle.module)} / Nozzle ${escapeText(nozzle.index+1)}</span><span>Type ${escapeText(nozzle.type)}</span></div><strong>${escapeText(Number(nozzle.diameter).toFixed(2))} <small>mm</small></strong><small>${escapeText(Number(nozzle.temperature).toFixed(1))} &deg;C / ${escapeText(nozzle.target)} &deg;C target</small></div>`).join(''):'No nozzle configuration reported';
+    $('nozzles').innerHTML=data.nozzles.length?data.nozzles.map(nozzle=>renderNozzle(nozzle,data.nozzles.length===2 && data.nozzles[0].module===data.nozzles[1].module)).join(''):'No nozzle configuration reported';
     $('beds').className=data.beds.length?'nozzle-grid':'empty'; $('beds').innerHTML=data.beds.length?data.beds.map(bed=>`<div class="nozzle"><div class="nozzle-head"><span>Module ${escapeText(bed.module)} / Zone ${escapeText(bed.zone+1)}</span></div><strong>${escapeText(Number(bed.temperature).toFixed(1))} <small>&deg;C</small></strong><small>${escapeText(bed.target)} &deg;C target</small></div>`).join(''):'No bed temperature reported';
     $('warnings').hidden=!data.warnings.length; $('warnings').innerHTML=data.warnings.map(warning=>`<li>${escapeText(warning)}</li>`).join('');
     $('details').hidden=!data.details; $('details-data').textContent=data.details?JSON.stringify(data.details,null,2):'';

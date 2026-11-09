@@ -74,7 +74,7 @@ Get help: `sm2uploader -h`
 
 Run `sm2uploader --web-interface --host 192.168.1.20` and open <http://127.0.0.1:8889/>. Omit `--host` to discover and select a printer. The interface listens only on the local machine and sends selected files to printer storage without starting a print or changing file contents. Stop it with Ctrl-C.
 
-Status is refreshed every 30 seconds. SACP printers can report modules, nozzle diameter and temperatures, bed temperatures, and workflow status when supported by their firmware. Legacy HTTP printers report their available module and status data; nozzle configuration may be unavailable. A printer may ask for authorization on its touchscreen. The web interface and `--octoprint` are separate modes and cannot be used together. An existing service on port 8889 must be stopped before starting the interface.
+Status is refreshed every 30 seconds. SACP printers can report modules, nozzle diameter and temperatures, bed temperatures, and workflow status when supported by their firmware. Legacy HTTP printers report nozzle and bed temperatures and the active extruder where available. For A150/A250/A350 printers, the dashboard also reads matching local Luban profiles for nozzle diameters; these are labeled as slicer settings, not verified hardware readings. A printer may ask for authorization on its touchscreen. The web interface and `--octoprint` are separate modes and cannot be used together. An existing service on port 8889 must be stopped before starting the interface.
 
 SACP uploads use a temporary file for random-access transfer and remove it afterward. The original bytes are never modified.
 

@@ -8,6 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -20,12 +23,14 @@ type printerModule struct {
 }
 
 type printerNozzle struct {
-	Module      byte    `json:"module"`
-	Index       byte    `json:"index"`
-	Type        byte    `json:"type"`
-	Diameter    float32 `json:"diameter"`
-	Temperature float32 `json:"temperature"`
-	Target      uint16  `json:"target"`
+	Module         byte     `json:"module"`
+	Index          byte     `json:"index"`
+	Type           *byte    `json:"type,omitempty"`
+	Diameter       *float32 `json:"diameter,omitempty"`
+	DiameterSource string   `json:"diameterSource,omitempty"`
+	Temperature    *float32 `json:"temperature,omitempty"`
+	Target         *float32 `json:"target,omitempty"`
+	Active         *bool    `json:"active,omitempty"`
 }
 
 type printerBed struct {
@@ -89,10 +94,133 @@ func sacpWorkflow(conn net.Conn) (string, error) {
 var moduleNames = map[uint16]string{
 	0: "Print head", 1: "CNC head", 2: "Laser head", 5: "Enclosure",
 	6: "Rotary module", 7: "Air purifier", 8: "Emergency stop", 13: "Dual extrusion head",
-	14: "10 W laser", 15: "High power CNC", 16: "Enclosure", 19: "20 W laser",
+	14: "10 W laser", 15: "High power CNC", 16: "Enclosure", 18: "Dual extrusion head", 19: "20 W laser",
 	20: "40 W laser", 23: "2 W laser", 512: "Heated bed", 513: "J1 heated bed",
 	514: "J1 linear module", 515: "Artisan heated bed", 517: "Emergency stop", 518: "Enclosure",
 	519: "Quick Swap Kit", 522: "Bracing Kit",
+}
+
+func valuePointer[T any](value T) *T {
+	return &value
+}
+
+func isPrintModule(id uint16) bool {
+	return id == 0 || id == 13 || id == 18
+}
+
+func applyLubanNozzleProfiles(configDir, model string, modules []printerModule, nozzles []printerNozzle) {
+	model = strings.ToLower(model)
+	series := ""
+	for _, candidate := range []string{"a150", "a250", "a350"} {
+		if strings.Contains(model, candidate) {
+			series = candidate
+			break
+		}
+	}
+	if series == "" {
+		return
+	}
+	for index := range nozzles {
+		nozzle := &nozzles[index]
+		if nozzle.Diameter != nil || nozzle.Index > 1 {
+			continue
+		}
+		profile := ""
+		for _, module := range modules {
+			if module.Key == nozzle.Module && isPrintModule(module.ID) {
+				profile = series + "_single"
+				if module.ID == 13 || module.ID == 18 {
+					profile = series + "_dual"
+				}
+				break
+			}
+		}
+		if profile == "" {
+			continue
+		}
+		path := filepath.Join(configDir, "snapmaker-luban", "Config", "printing", profile, fmt.Sprintf("extruder_%d.def.json", nozzle.Index))
+		file, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		var definition struct {
+			Overrides struct {
+				NozzleSize struct {
+					DefaultValue *float32 `json:"default_value"`
+				} `json:"machine_nozzle_size"`
+			} `json:"overrides"`
+		}
+		err = json.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&definition)
+		file.Close()
+		diameter := definition.Overrides.NozzleSize.DefaultValue
+		if err == nil && diameter != nil && *diameter > 0 && *diameter <= 2.5 {
+			nozzle.Diameter = diameter
+			nozzle.DiameterSource = "Luban profile"
+		}
+	}
+}
+
+func parseHTTPModuleInfo(data []byte, modules []printerModule) ([]printerNozzle, []printerBed, error) {
+	var result struct {
+		ModuleInfo []struct {
+			Key                      byte     `json:"key"`
+			NozzleTemperature        *float32 `json:"nozzleTemperature"`
+			NozzleTargetTemperature  *float32 `json:"nozzleTargetTemperature"`
+			NozzleTemperature1       *float32 `json:"nozzleTemperature1"`
+			NozzleTargetTemperature1 *float32 `json:"nozzleTargetTemperature1"`
+			NozzleTemperature2       *float32 `json:"nozzleTemperature2"`
+			NozzleTargetTemperature2 *float32 `json:"nozzleTargetTemperature2"`
+			HeatedBedTemperature     *float32 `json:"heatedBedTemperature"`
+			HeatedBedTarget          *int16   `json:"heatedBedTargetTemperature"`
+		} `json:"moduleInfo"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, nil, err
+	}
+	var nozzles []printerNozzle
+	var beds []printerBed
+	for _, info := range result.ModuleInfo {
+		var module *printerModule
+		for index := range modules {
+			if modules[index].Key == info.Key {
+				module = &modules[index]
+				break
+			}
+		}
+		if module != nil && isPrintModule(module.ID) {
+			left := printerNozzle{Module: info.Key, Index: 0, Temperature: info.NozzleTemperature1, Target: info.NozzleTargetTemperature1}
+			if left.Temperature == nil {
+				left.Temperature = info.NozzleTemperature
+			}
+			if left.Target == nil {
+				left.Target = info.NozzleTargetTemperature
+			}
+			nozzles = append(nozzles, left)
+			if module.ID == 13 || module.ID == 18 || info.NozzleTemperature2 != nil || info.NozzleTargetTemperature2 != nil {
+				nozzles = append(nozzles, printerNozzle{Module: info.Key, Index: 1, Temperature: info.NozzleTemperature2, Target: info.NozzleTargetTemperature2})
+			}
+		}
+		if info.HeatedBedTemperature != nil && info.HeatedBedTarget != nil {
+			beds = append(beds, printerBed{Module: info.Key, Zone: 0, Temperature: *info.HeatedBedTemperature, Target: *info.HeatedBedTarget})
+		}
+	}
+	return nozzles, beds, nil
+}
+
+func setHTTPActiveNozzle(data []byte, nozzles []printerNozzle) error {
+	var result struct {
+		Active *int `json:"active"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return err
+	}
+	if result.Active == nil || *result.Active < 0 || *result.Active > 1 {
+		return fmt.Errorf("invalid active extruder")
+	}
+	for index := range nozzles {
+		nozzles[index].Active = valuePointer(int(nozzles[index].Index) == *result.Active)
+	}
+	return nil
 }
 
 func moduleName(id uint16) string {
@@ -137,7 +265,7 @@ func parseSACPNozzles(data []byte) ([]printerNozzle, error) {
 		entry := data[4+index*17 : 4+(index+1)*17]
 		diameter := float32(int32(binary.LittleEndian.Uint32(entry[5:9]))) / 1000
 		temperature := float32(int32(binary.LittleEndian.Uint32(entry[9:13]))) / 1000
-		nozzles = append(nozzles, printerNozzle{Module: data[0], Index: entry[0], Type: entry[4], Diameter: diameter, Temperature: temperature, Target: binary.LittleEndian.Uint16(entry[13:15])})
+		nozzles = append(nozzles, printerNozzle{Module: data[0], Index: entry[0], Type: valuePointer(entry[4]), Diameter: valuePointer(diameter), Temperature: valuePointer(temperature), Target: valuePointer(float32(binary.LittleEndian.Uint16(entry[13:15]))), Active: valuePointer(entry[3] == 1)})
 	}
 	return nozzles, nil
 }
@@ -205,7 +333,7 @@ func readPrinterStatus(printer *Printer) (printerStatus, error) {
 					}
 					continue
 				}
-				if module.ID != 0 && module.ID != 13 {
+				if !isPrintModule(module.ID) {
 					continue
 				}
 				data, err = sacpQuery(connection.conn, uint16(11+index), 0x10, 0x01, []byte{module.Key})
@@ -224,7 +352,10 @@ func readPrinterStatus(printer *Printer) (printerStatus, error) {
 		case *HTTPConnector:
 			status.Protocol = "HTTP"
 			client := &http.Client{Timeout: 5 * time.Second}
-			for _, endpoint := range []string{"module_list", "module_info", "status"} {
+			for _, endpoint := range []string{"module_list", "module_info", "status", "active_extruder"} {
+				if endpoint == "active_extruder" && len(status.Nozzles) == 0 {
+					continue
+				}
 				address := connection.URL("/"+endpoint) + "?token=" + url.QueryEscape(printer.Token)
 				response, err := client.Get(address)
 				if err != nil {
@@ -256,6 +387,17 @@ func readPrinterStatus(printer *Printer) (printerStatus, error) {
 					}
 				} else if endpoint == "module_info" {
 					status.Details = body
+					nozzles, beds, err := parseHTTPModuleInfo(body, status.Modules)
+					if err != nil {
+						status.Warnings = append(status.Warnings, "module_info: invalid response")
+					} else {
+						status.Nozzles = append(status.Nozzles, nozzles...)
+						status.Beds = append(status.Beds, beds...)
+					}
+				} else if endpoint == "active_extruder" {
+					if err := setHTTPActiveNozzle(body, status.Nozzles); err != nil {
+						status.Warnings = append(status.Warnings, "active_extruder: invalid response")
+					}
 				} else {
 					var heartbeat struct {
 						Status string `json:"status"`
@@ -265,9 +407,12 @@ func readPrinterStatus(printer *Printer) (printerStatus, error) {
 					}
 				}
 			}
+			if configDir, err := os.UserConfigDir(); err == nil {
+				applyLubanNozzleProfiles(configDir, status.Model, status.Modules, status.Nozzles)
+			}
 			for _, module := range status.Modules {
-				if module.ID == 0 || module.ID == 13 {
-					status.Warnings = append(status.Warnings, "Nozzle configuration is not available from this printer protocol.")
+				if isPrintModule(module.ID) {
+					status.Warnings = append(status.Warnings, "Nozzle diameter and type are not reported by the printer's HTTP API. Luban profile sizes, if shown, are slicer settings and may differ from the installed nozzles.")
 					break
 				}
 			}
