@@ -9,9 +9,11 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"os"
 	"time"
 )
 
@@ -67,10 +69,10 @@ func (sacp SACP_pack) Encode() []byte {
 }
 
 func (sacp *SACP_pack) Decode(data []byte) error {
-	if len(data) < 13 {
+	if len(data) < 15 {
 		return errInvalidSize
 	}
-	if data[0] != 0xAA && data[1] != 0x55 {
+	if data[0] != 0xAA || data[1] != 0x55 {
 		return errInvalidSACP
 	}
 	dataLen := binary.LittleEndian.Uint16(data[2:4])
@@ -148,7 +150,7 @@ func writeLE[T any](w io.Writer, u T) {
 }
 
 func SACP_connect(ip string, timeout time.Duration) (net.Conn, error) {
-	conn, err := net.Dial("tcp4", ip+":8888")
+	conn, err := net.DialTimeout("tcp4", net.JoinHostPort(ip, SACPPort), timeout)
 	if err != nil {
 		// log.Printf("Error connecting to %s: %v", ip, err)
 		return nil, err
@@ -200,30 +202,25 @@ func SACP_connect(ip string, timeout time.Duration) (net.Conn, error) {
 }
 
 func SACP_read(conn net.Conn, timeout time.Duration) (*SACP_pack, error) {
-	var buf [SACP_data_len + 15]byte
+	var buf [65535 + 7]byte
 
 	deadline := time.Now().Add(timeout)
 	conn.SetReadDeadline(deadline)
 
-	n, err := conn.Read(buf[:4])
-	if err != nil {
+	if _, err := io.ReadFull(conn, buf[:4]); err != nil {
 		return nil, err
-	}
-	if n != 4 {
-		return nil, errInvalidSize
 	}
 
 	dataLen := binary.LittleEndian.Uint16(buf[2:4])
-	n, err = conn.Read(buf[4 : dataLen+7])
-	if err != nil {
-		return nil, err
-	}
-	if n != int(dataLen+3) {
+	if dataLen < 8 {
 		return nil, errInvalidSize
+	}
+	if _, err := io.ReadFull(conn, buf[4:int(dataLen)+7]); err != nil {
+		return nil, err
 	}
 
 	var sacp SACP_pack
-	err = sacp.Decode(buf[:dataLen+7])
+	err := sacp.Decode(buf[:int(dataLen)+7])
 
 	return &sacp, err
 }
@@ -309,15 +306,31 @@ func SACP_send_command(conn net.Conn, command_set uint8, command_id uint8, data 
 	}
 }
 
-func SACP_start_upload(conn net.Conn, filename string, gcode []byte, timeout time.Duration) error {
+func SACP_start_upload_reader(conn net.Conn, filename string, reader io.Reader, size int64, timeout time.Duration) error {
+	spool, err := os.CreateTemp("", "sm2uploader-*.spool")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		spool.Close()
+		os.Remove(spool.Name())
+	}()
+	hash := md5.New()
+	written, err := io.Copy(io.MultiWriter(spool, hash), io.LimitReader(reader, FILE_SIZE_MAX+1))
+	if err != nil {
+		return err
+	}
+	if written != size || written > FILE_SIZE_MAX {
+		return fmt.Errorf("upload size mismatch: expected %d bytes, received %d", size, written)
+	}
 	// prepare data for upload begin packet
-	package_count := uint16((len(gcode) / SACP_data_len) + 1)
-	md5hash := md5.Sum(gcode)
+	package_count := uint16((written / SACP_data_len) + 1)
+	md5hash := hash.Sum(nil)
 
 	data := bytes.Buffer{}
 
 	writeSACPstring(&data, filename)
-	writeLE(&data, uint32(len(gcode)))
+	writeLE(&data, uint32(written))
 	writeLE(&data, package_count)
 	writeSACPstring(&data, hex.EncodeToString(md5hash[:]))
 
@@ -326,7 +339,7 @@ func SACP_start_upload(conn net.Conn, filename string, gcode []byte, timeout tim
 	}
 
 	conn.SetWriteDeadline(time.Now().Add(timeout))
-	_, err := conn.Write(SACP_pack{
+	_, err = conn.Write(SACP_pack{
 		ReceiverID: 2,
 		SenderID:   0,
 		Attribute:  0,
@@ -370,12 +383,19 @@ func SACP_start_upload(conn net.Conn, filename string, gcode []byte, timeout tim
 			}
 
 			pkgRequested := binary.LittleEndian.Uint16(p.Data[2+md5_len : 2+md5_len+2])
-			var pkgData []byte
-
-			if pkgRequested == package_count-1 { // last package
-				pkgData = gcode[SACP_data_len*int(pkgRequested):]
-			} else { // regular package
-				pkgData = gcode[SACP_data_len*int(pkgRequested) : SACP_data_len*int(pkgRequested+1)]
+			if pkgRequested >= package_count {
+				return fmt.Errorf("invalid SACP chunk index %d", pkgRequested)
+			}
+			offset := int64(pkgRequested) * SACP_data_len
+			chunkLen := int64(SACP_data_len)
+			if remaining := written - offset; remaining < chunkLen {
+				chunkLen = remaining
+			}
+			pkgData := make([]byte, chunkLen)
+			if len(pkgData) > 0 {
+				if _, err := spool.ReadAt(pkgData, offset); err != nil {
+					return err
+				}
 			}
 
 			data := bytes.Buffer{}
@@ -409,10 +429,6 @@ func SACP_start_upload(conn net.Conn, filename string, gcode []byte, timeout tim
 
 				if Debug {
 					log.Print("-- Upload finished")
-				}
-
-				if err := SACP_disconnect(conn, timeout); err != nil {
-					return err
 				}
 
 				return nil // everything is ok!

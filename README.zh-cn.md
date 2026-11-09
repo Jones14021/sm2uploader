@@ -7,14 +7,14 @@ Luban 和 Cura with SnapmakerPlugin 对于新手很友好，但是我的大部�
 ## 功能
 - 自动发现局域网内所有的 Snapmaker 打印机（和 Luban 相同的协议，使用 UDP 广播）
 - 模拟 OctoPrint Server，这样就可以在各种切片软件，比如 Cura/PrusaSlicer/SuperSlicer/OrcaSlicer 中向 Snapmaker 打印机发送文件
-- 为多挤出机提供智能预热、关闭不再使用的喷头等优化功能
-- 强化擦料塔，避免多材料打印时因不粘合而倒塌，例如在 PETG+PLA 混合打印时
+- 文件按原样转发，不修改或优化 G-code
+- 本地 Web 界面可查看打印机状态、模块和支持的喷嘴配置，并上传文件
 - Snapmaker 2 A-Series 第一次连接时需要授权，之后可以直接一步上传
 - 支持 Snapmaker 2 A/J1/Artisan 全系列打印机
 - 支持 macOS/Windows/Linux/RaspberryPi 多个平台
 
 ## 使用方法
-下载适用的[程序文件](https://github.com/macdylan/sm2uploader/releases)
+下载适用的[程序文件](https://github.com/Jones14021/sm2uploader/releases)
   - Linux/macOS 下，可能需要赋予可执行权限 `chmod +x sm2uploader`
 
 Windows 使用方法:
@@ -65,6 +65,8 @@ Request POST /api/files/local completed in 951.080458ms
 打印机的 UDP 应答服务有时会挂掉，通常需要重启打印机来解决。或者你可以直接指定目标IP: `sm2uploader -host 192.168.1.20 /file.gcode`
 
 如果 `host` 被发现过或者连接过，它会存在于 `knownhosts` 中，直接使用 id 进行连接会更加简洁: `sm2uploader -host A350-3DP /file.gcode`
+
+Linux 默认将已知打印机和授权令牌保存在 `$XDG_STATE_HOME/sm2uploader/hosts.yaml`，未设置时使用 `~/.local/state/sm2uploader/hosts.yaml`。程序会自动更新文件，并在新位置不存在时迁移可执行文件旁的旧 `hosts.yaml`。可以使用 `--knownhosts` 或 `KNOWN_HOSTS` 指定其他位置。
 
 更多参数：`sm2uploader -h`
 

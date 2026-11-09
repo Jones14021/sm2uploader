@@ -121,7 +121,14 @@ func getBroadcastAddresses() ([]string, error) {
 					// by converting the address into a 32 bit integer and then
 					// ORing it with the inverted mask
 					baddr := make(net.IP, len(v4addr))
-					binary.BigEndian.PutUint32(baddr, binary.BigEndian.Uint32(v4addr)|^binary.BigEndian.Uint32(n.IP.DefaultMask()))
+					mask := n.Mask
+					if len(mask) == net.IPv6len {
+						mask = mask[12:]
+					}
+					if len(mask) != net.IPv4len {
+						continue
+					}
+					binary.BigEndian.PutUint32(baddr, binary.BigEndian.Uint32(v4addr)|^binary.BigEndian.Uint32(mask))
 					if s := baddr.String(); !addrMap[s] {
 						addrMap[s] = true
 					}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -50,6 +51,7 @@ func NewPayload(file io.Reader, name string, size int64) *Payload {
 
 type connector struct {
 	handlers []Handler
+	mu       sync.Mutex
 }
 
 type Handler interface {
@@ -68,6 +70,8 @@ func (c *connector) RegisterHandler(h Handler) {
 
 // Upload to upload a file to a printer
 func (c *connector) Upload(printer *Printer, payload *Payload) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	// Iterate through all handlers
 	for _, h := range c.handlers {
 		// Check if handler can ping the printer
@@ -104,6 +108,8 @@ func (c *connector) Upload(printer *Printer, payload *Payload) error {
 }
 
 func (c *connector) PreHeatCommands(printer *Printer, tool_1_temperature int, tool_2_temperature int, bed_temperature int, home bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	// Iterate through all handlers
 	for _, h := range c.handlers {
 		// Check if handler can ping the printer
@@ -113,6 +119,9 @@ func (c *connector) PreHeatCommands(printer *Printer, tool_1_temperature int, to
 				return err
 			}
 			defer h.Disconnect()
+			if OnPrinterUpdate != nil {
+				OnPrinterUpdate(printer)
+			}
 
 			// Send the GCode command to the printer
 			if tool_1_temperature > 0 {

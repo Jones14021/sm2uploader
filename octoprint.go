@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"sync"
 	"time"
 )
 
@@ -15,6 +16,7 @@ const (
 )
 
 type stats struct {
+	mu          sync.Mutex
 	start       time.Time
 	memory      uint64
 	success     uint
@@ -30,6 +32,8 @@ type last struct {
 }
 
 func (s *stats) addSuccess(filaname string, size int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.success++
 	s.lastSuccess = &last{
 		filaname: normalizedFilename(filaname),
@@ -39,6 +43,8 @@ func (s *stats) addSuccess(filaname string, size int64) {
 }
 
 func (s *stats) addFailure(filaname string, size int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.failure++
 	s.lastFailure = &last{
 		filaname: normalizedFilename(filaname),
@@ -48,6 +54,8 @@ func (s *stats) addFailure(filaname string, size int64) {
 }
 
 func (s *stats) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	s.memory = mem.Alloc
@@ -103,11 +111,13 @@ func startOctoPrintServer(listenAddr string, printer *Printer) error {
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, FILE_SIZE_MAX+(1<<20))
 		err := r.ParseMultipartForm(maxMemory)
 		if err != nil {
-			internalServerErrorResponse(w, err.Error())
+			bedRequestResponse(w, err.Error())
 			return
 		}
+		defer r.MultipartForm.RemoveAll()
 
 		// Retrieve the uploaded file
 		file, fd, err := r.FormFile("file")

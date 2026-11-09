@@ -48,11 +48,6 @@ func (sc *SACPConnector) Disconnect() error {
 }
 
 func (sc *SACPConnector) Upload(payload *Payload) (err error) {
-	content, err := payload.GetContent()
-	if err != nil {
-		return
-	}
-
 	w := uilive.New()
 	w.Start()
 	log.SetOutput(w)
@@ -61,7 +56,7 @@ func (sc *SACPConnector) Upload(payload *Payload) (err error) {
 		log.SetOutput(os.Stderr)
 	}()
 
-	err = SACP_start_upload(sc.conn, payload.Name, content, SACPTimeout*time.Second)
+	err = SACP_start_upload_reader(sc.conn, payload.Name, payload.File, payload.Size, SACPTimeout*time.Second)
 	return
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -40,7 +41,8 @@ func (hc *HTTPConnector) Ping(p *Printer) bool {
 
 func (hc *HTTPConnector) Connect() error {
 	result := struct {
-		Token string `json:"token"`
+		Token  string          `json:"token"`
+		Series json.RawMessage `json:"series"`
 	}{}
 
 	req := hc.request().
@@ -48,8 +50,11 @@ func (hc *HTTPConnector) Connect() error {
 		SetRetryCount(3).
 		SetRetryFixedInterval(1 * time.Second).
 		SetRetryCondition(func(r *req.Response, err error) bool {
+			if r == nil {
+				return false
+			}
 			if Debug {
-				log.Printf("-- retrying %s -> %d, token %s", r.Request.URL, r.StatusCode, hc.printer.Token)
+				log.Printf("-- retrying printer connection -> %d", r.StatusCode)
 			}
 
 			// token expired
@@ -69,8 +74,18 @@ func (hc *HTTPConnector) Connect() error {
 		if hc.printer.Token != result.Token {
 			hc.printer.Token = result.Token
 		}
+		if hc.printer.Model == "" {
+			var series string
+			if json.Unmarshal(result.Series, &series) == nil {
+				hc.printer.Model = series
+			}
+		}
 		tip := false
+		deadline := time.Now().Add(60 * time.Second)
 		for {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("printer authorization timed out")
+			}
 			switch hc.checkStatus() {
 			case AuthStatusApproved:
 				return nil
@@ -155,17 +170,7 @@ func (hc *HTTPConnector) Upload(payload *Payload) (err error) {
 		ParamName: "file",
 		FileName:  payload.Name,
 		GetFileContent: func() (io.ReadCloser, error) {
-			pr, pw := io.Pipe()
-			go func() {
-				content, err := payload.GetContent()
-				if err != nil {
-					pw.CloseWithError(err)
-					return
-				}
-				pw.Write(content)
-				pw.Close()
-			}()
-			return pr, nil
+			return io.NopCloser(payload.File), nil
 		},
 		FileSize: payload.Size,
 		// ContentType: "application/octet-stream",
@@ -181,7 +186,10 @@ func (hc *HTTPConnector) Upload(payload *Payload) (err error) {
 		}
 	}, 35*time.Millisecond)
 
-	_, err = r.Post(hc.URL("/upload"))
+	response, err := r.Post(hc.URL("/upload"))
+	if err == nil && (response.StatusCode < 200 || response.StatusCode >= 300) {
+		return fmt.Errorf("upload failed: HTTP %d", response.StatusCode)
+	}
 	return
 }
 
@@ -210,7 +218,7 @@ func (hc *HTTPConnector) request(timeout ...int) *req.Request {
 
 func (hc *HTTPConnector) checkStatus() (status int) {
 	r, err := hc.request().Get(hc.URL("/status"))
-	if Debug {
+	if Debug && r != nil {
 		log.Printf("-- heartbeat: %d, err(%s)", r.StatusCode, err)
 	}
 	if err == nil {

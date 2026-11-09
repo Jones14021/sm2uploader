@@ -17,6 +17,7 @@ var (
 	KnownHosts          string
 	DiscoverTimeout     time.Duration
 	OctoPrintListenAddr string
+	WebInterface        bool
 	Tool1Temperature    int
 	Tool2Temperature    int
 	BedTemperature      int
@@ -33,13 +34,7 @@ func main() {
 		}
 	}()
 
-	// 获取程序所在目录 - Get the directory where the program is located
-	ex, _ := os.Executable()
-	dir, err := filepath.Abs(filepath.Dir(ex))
-	if err != nil {
-		log.Panicln(err)
-	}
-	defaultKnownHosts := filepath.Join(dir, "hosts.yaml")
+	defaultKnownHosts, defaultPathErr := defaultKnownHostsPath()
 	if envKnownhosts := os.Getenv("KNOWN_HOSTS"); envKnownhosts != "" {
 		defaultKnownHosts = envKnownhosts
 	}
@@ -47,6 +42,7 @@ func main() {
 	flag.StringVar(&Host, "host", os.Getenv("HOST"), "upload to host(id/ip/hostname), not required.")
 	flag.StringVar(&KnownHosts, "knownhosts", defaultKnownHosts, "known hosts")
 	flag.StringVar(&OctoPrintListenAddr, "octoprint", os.Getenv("OCTOPRINT"), "octoprint listen address, e.g. '-octoprint :8844' then you can upload files to printer by http://localhost:8844")
+	flag.BoolVar(&WebInterface, "web-interface", false, "start the local web interface on 127.0.0.1:8889")
 	flag.IntVar(&Tool1Temperature, "tool1", parseIntEnv("TOOL1", 0), "set the temperature (preheat) of tool 1")
 	flag.IntVar(&Tool2Temperature, "tool2", parseIntEnv("TOOL2", 0), "set the temperature (preheat) of tool 2")
 	flag.IntVar(&BedTemperature, "bed", parseIntEnv("BED", 0), "set the temperature (preheat) of bed")
@@ -56,13 +52,25 @@ func main() {
 
 	flag.Usage = flag_usage
 	flag.Parse()
+	if KnownHosts == "" {
+		log.Panicf("Cannot determine known hosts path: %v", defaultPathErr)
+	}
 
 	if Debug {
 		log.Printf("-- Debug mode: %s", Version)
 	}
 
 	var printer *Printer
-	ls := NewLocalStorage(KnownHosts)
+	legacyPath := ""
+	if os.Getenv("KNOWN_HOSTS") == "" && KnownHosts == defaultKnownHosts {
+		if executable, err := os.Executable(); err == nil {
+			legacyPath = filepath.Join(filepath.Dir(executable), "hosts.yaml")
+		}
+	}
+	ls, err := NewLocalStorage(KnownHosts, legacyPath)
+	if err != nil {
+		log.Panicln(err)
+	}
 	// Persist the token to known hosts as soon as it is (re)obtained on connect,
 	// so it survives restarts even on an unclean exit (the shutdown defer below
 	// only runs on a graceful exit).
@@ -71,7 +79,9 @@ func main() {
 			return
 		}
 		ls.Add(p)
-		_ = ls.Save()
+		if err := ls.Save(); err != nil {
+			log.Printf("Could not save known hosts: %v", err)
+		}
 	}
 	defer func() {
 		if printer != nil {
@@ -100,6 +110,9 @@ func main() {
 				log.Printf("-- Discovered %d printers", len(printers))
 			}
 			ls.Add(printers...)
+			if err := ls.Save(); err != nil {
+				log.Printf("Could not save known hosts: %v", err)
+			}
 		} else if Debug {
 			log.Printf("-- Discover error: %s", err.Error())
 		}
@@ -136,6 +149,11 @@ func main() {
 		}
 	}
 
+	ls.Add(printer)
+	if err := ls.Save(); err != nil {
+		log.Printf("Could not save known hosts: %v", err)
+	}
+
 	log.Println("Printer IP:", printer.IP)
 	if printer.Model != "" {
 		log.Println("Printer Model:", printer.Model)
@@ -147,18 +165,18 @@ func main() {
 	go func() {
 		sig := <-sc
 		log.Printf("Received signal: %s", sig)
-		// update printer's token
-		if printer != nil {
-			ls.Add(printer)
-			if Debug {
-				log.Printf("-- Updated printer: %s", printer.String())
-			}
-		}
-		if err := ls.Save(); err == nil && Debug {
-			log.Printf("-- Saved known hosts: %s", KnownHosts)
-		}
 		os.Exit(0)
 	}()
+
+	if WebInterface {
+		if OctoPrintListenAddr != "" {
+			log.Panicln("-web-interface and -octoprint cannot be used together")
+		}
+		if err := startWebInterface(printer); err != nil {
+			log.Panic(err)
+		}
+		return
+	}
 
 	if OctoPrintListenAddr != "" {
 		// listen for octoprint uploads
@@ -178,12 +196,16 @@ func main() {
 
 	// 检查文件参数是否存在 - Check if the file parameter exists
 	for _, file := range flag.Args() {
-		if st, err := os.Stat(file); os.IsNotExist(err) {
-			log.Panicf("File %s does not exist\n", file)
-		} else {
-			f, _ := os.Open(file)
-			_Payloads = append(_Payloads, NewPayload(f, st.Name(), st.Size()))
+		st, err := os.Stat(file)
+		if err != nil {
+			log.Panicf("Cannot stat %s: %v", file, err)
 		}
+		f, err := os.Open(file)
+		if err != nil {
+			log.Panicf("Cannot open %s: %v", file, err)
+		}
+		defer f.Close()
+		_Payloads = append(_Payloads, NewPayload(f, st.Name(), st.Size()))
 	}
 
 	// 检查是否有传入的文件 - Check if a file has been passed in

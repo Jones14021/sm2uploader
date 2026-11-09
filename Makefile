@@ -1,5 +1,6 @@
 DIST = dist/
 NAME = sm2uploader
+.DEFAULT_GOAL := darwin-arm64
 ifeq "$(GITHUB_REF_NAME)" ""
     VERSION := -X 'main.Version=$(shell git rev-parse --short HEAD)'
 else
@@ -11,6 +12,11 @@ SRC = $(shell ls *.go | grep -v _test.go)
 EXT_FILES = README.md README.zh-cn.md LICENSE
 
 .PHONY: all clean dep darwin-arm64 darwin-amd64 linux-amd64 linux-arm7 linux-arm6 win64 win32
+
+$(DIST):
+	mkdir -p $(DIST)
+
+darwin-arm64 darwin-amd64 linux-amd64 linux-arm7 linux-arm6 win64 win32: | $(DIST)
 
 darwin-arm64: $(SRC)
 	GOOS=darwin GOARCH=arm64 $(CMD) -o $(DIST)$(NAME)-$@ $^
